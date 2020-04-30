@@ -1,0 +1,104 @@
+###> Check Git Version
+
+git --version
+
+###> Git Config
+
+git config --global user.name iamamit
+
+git config --global user.email aks.com
+
+
+git config user.name
+
+###> Change directory:
+
+cd ..  >>>>go back
+
+cd amit >>> go Forward 
+
+cd document
+
+
+
+###> List the files in the current direcoty folder
+
+ls
+
+###> Make new direcotory:
+
+mkdir test
+
+###>> Make a new file
+
+touch index.html
+
+###>>> edit the file
+
+notepad index.html
+
+###> Delete\Remove File 
+
+rm index.html
+
+###>> Delete\Remove Directory
+
+rmdir test
+
+###>> Creating a Repository
+cd folderpath_here
+
+git init
+ 
+git status
+
+### Adding the modified files
+
+git add index.html
+
+git add . (everything will add)
+
+git status
+
+###>> Making Commits
+
+git commit -m "Type commits message here"
+
+
+
+
+###>> Check Git log
+
+git log
+
+git log --oneline
+co
+###>> Undoing Things
+
+
+
+###>> Branches
+
+##Create new branch
+
+git branch Testbranch
+
+git branch -a (check all branchS)
+
+git checkout Testbranch (swith the branch)
+
+
+git branch  -D Testbranch (delete branch)
+###>>
+
+
+
+
+
+
+
+
+
+
+
+
