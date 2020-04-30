@@ -1,0 +1,79 @@
+alter PROCEDURE [dbo].[JobStatus] 
+    -- Add the parameters for the stored procedure here 
+    @paramstatus int=Null 
+AS 
+BEGIN 
+    -- SET NOCOUNT ON added to prevent extra result sets from 
+    -- interfering with SELECT statements. 
+    SET NOCOUNT ON; 
+ 
+    -- Insert statements for procedure here 
+    SELECT * FROM ( 
+            SELECT  
+                RunDate=DATEADD(SECOND, CASE WHEN LEN(run_time)=1 then RIGHT(CAST(run_time AS VARCHAR(6)),1) 
+                                             WHEN LEN(run_time)=2 then RIGHT(CAST(run_time AS VARCHAR(6)),2) 
+                                             WHEN LEN(run_time)=3 then LEFT(CAST(run_time AS VARCHAR(6)),1)*60+RIGHT(CAST(run_time AS VARCHAR(6)),2) 
+                                             WHEN LEN(run_time)=4 then LEFT(CAST(run_time AS VARCHAR(6)),2)*60+RIGHT(CAST(run_time AS VARCHAR(6)),2) 
+                                             WHEN LEN(run_time)=5 then LEFT(CAST(run_time AS VARCHAR(6)),1)*60*60+SUBSTRING(CAST(run_time AS VARCHAR(6)),2,2)*60 
+                                                                                                                +RIGHT(CAST(run_time AS VARCHAR(6)),2) 
+                                            WHEN LEN(run_time)=6 then LEFT(CAST(run_time AS VARCHAR(6)),2)*60*60+SUBSTRING(CAST(run_time AS VARCHAR(6)),3,2)*60 
+                                                                                                                +RIGHT(CAST(run_time AS VARCHAR(6)),2) 
+                                        END,  
+                                CONVERT(DATETIME, CONVERT(CHAR(8), run_date))), 
+                JobName=b.name, 
+                StatusCode=run_status, 
+                RunStatus=CASE WHEN run_status=0 THEN 'Error'  
+                                WHEN run_status=1 THEN 'Succeeded' 
+                                WHEN run_status=2 THEN 'Retry' 
+                                WHEN run_status=3 THEN 'Canceled'  
+                                WHEN run_status=4 THEN 'Running'  
+                                ELSE 'Unknown' END, 
+                ElapsedTime=run_duration, 
+                StepName=step_name, 
+                SqlMessageId=sql_message_id, 
+                SqlSeverity=sql_severity, 
+                [Message]=[message], 
+                [Server]=[server] 
+            FROM  
+                msdb.[dbo].[sysjobhistory] a  
+                JOIN  
+                    msdb.[dbo].[sysjobs] b  
+                ON a.job_id=b.job_id 
+        UNION 
+            SELECT  
+                RunDate=jact.run_requested_date, 
+                JobName=jv.name, 
+                StatusCode=4, 
+                RunStatus='Running', 
+                ElapsedTime=DATEDIFF( SECOND, jact.run_requested_date, GETDATE() ) , 
+                Null, 
+                Null, 
+                Null, 
+                Null, 
+                [Server]=jv.originating_server 
+            FROM  
+                msdb.dbo.sysjobs_view jv 
+                JOIN 
+                    msdb.dbo.sysjobactivity jact 
+                ON  
+                    jv.job_id = jact.job_id 
+                JOIN 
+                    msdb.dbo.syssessions ss 
+                    ON 
+                    ss.session_id = jact.session_id 
+                JOIN 
+                    ( 
+                        SELECT 
+                            MAX( agent_start_date ) AS max_agent_start_date 
+                        FROM 
+                            msdb.dbo.syssessions 
+                    ) sess 
+                    ON 
+                        ss.agent_start_date = sess.max_agent_start_date 
+                WHERE  
+                    run_requested_date IS NOT NULL AND stop_execution_date IS NULL 
+         
+ )QUERY 
+ WHERE (StatusCode=@paramstatus) OR (-1=isnull(@paramstatus,-1)) 
+ ORDER BY RunDate DESC  
+END 

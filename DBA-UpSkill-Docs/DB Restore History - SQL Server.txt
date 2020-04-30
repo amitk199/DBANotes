@@ -1,0 +1,27 @@
+SELECT	
+        bs.server_name AS OriginalServerName,
+		bs.database_name AS OriginalDatabaseName,
+		rh.destination_database_name AS	RestoredDatabase,
+		CASE RH.restore_type 
+			WHEN 'D' THEN 'Database'
+			WHEN 'F' THEN 'File'
+			WHEN 'G' THEN 'Filegroup'
+			WHEN 'I' THEN 'Differential'
+			WHEN 'L' THEN 'Log'
+			WHEN 'V' THEN 'Verify Only'
+			WHEN 'R' THEN 'Revert'
+		END AS RestoreType,
+		CASE rh.recovery 
+			WHEN 0 THEN 'NORECOVERY'
+			WHEN 1 THEN 'RECOVERY'
+		END AS RecoveryType,
+		rh.restore_date AS RestoreDate,
+		bmf.physical_device_name AS RestoreFromSource,
+		rh.user_name AS UserName
+FROM
+	msdb.dbo.restorehistory rh
+	INNER JOIN 	msdb.dbo.backupset bs
+	ON 	rh.backup_set_id = bs.backup_set_id
+	INNER JOIN 	msdb.dbo.backupmediafamily bmf
+	ON 	bs.media_set_id = bmf.media_set_id 
+	ORDER BY rh.restore_history_id

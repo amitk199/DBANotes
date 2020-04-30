@@ -1,0 +1,101 @@
+Use Master 
+Go 
+CREATE Function dbo.udf_JobScheduleDays (@IntervalDayNo SMALLINT) 
+Returns Nvarchar(200) 
+As
+Begin 
+	Declare @TotalProcessed TinyInt, @Output Nvarchar(200)  
+	Declare @myTable Table (DayID TinyInt, DayDesc Char(20)) 
+	Insert Into @myTable 
+	Select 1, 'Sunday' Union All 
+	Select 2, 'Monday' Union All 
+	Select 4, 'Tuesday' Union All 
+	Select 8, 'Wednesday' Union All 
+	Select 16, 'Thursday' Union All 
+	Select 32, 'Friday' Union All 
+	Select 64, 'Saturday'
+
+	Declare @Process Table (DayID TinyInt, RowNo Tinyint) 
+	Insert Into @Process
+	Select DayID, ROW_NUMBER() Over(Order by DayID Desc) As RowNo  
+	From 
+		@myTable AS MainQry 
+	Where 
+		1 = (CASE 
+				WHEN EXISTS (SELECT 1 FROM @myTable SubQry WHERE SubQry.DayID = @IntervalDayNo AND SubQry.DayID = MainQry.DayID) THEN 1 
+				ELSE 
+					(CASE 
+						WHEN EXISTS (SELECT 1 FROM @myTable SubQry WHERE SubQry.DayID < @IntervalDayNo AND SubQry.DayID = MainQry.DayID) THEN 1 
+						ELSE 0 
+					END) 
+			END)
+
+	Select @TotalProcessed = DayID From @Process Where RowNo = 1
+	Select @OutPut = Ltrim(Rtrim(T.DayDesc)) From @myTable T Inner Join @Process P On T.DayID = P.DayID Where P.RowNo = 1
+	While @IntervalDayNo - @TotalProcessed > 0 
+	Begin 
+		Delete From @Process 
+		Insert Into @Process
+		Select DayID, ROW_NUMBER() Over(Order by DayID Desc) As RowNo  
+		From 
+			@myTable
+		Where 
+			DayID <= @IntervalDayNo - @TotalProcessed 
+			
+		Select @TotalProcessed = @TotalProcessed + DayID From @Process Where RowNo = 1
+		Select @OutPut = @Output + ',' + Ltrim(Rtrim(T.DayDesc)) From @myTable T Inner Join @Process P On T.DayID = P.DayID Where P.RowNo = 1
+	End 
+	Return @Output 
+End 
+
+Go
+
+;With Job_History 
+As
+(
+	Select *, ROW_NUMBER() Over(Partition by Job_ID, Step_ID Order by Instance_ID Desc) As RowNo 
+	From 
+		MSDB.dbo.sysjobhistory 
+)
+	
+Select 
+	J.Job_ID 
+	,J.Name As JobName 
+	,suser_sname(J.owner_sid) AS JobOwner
+	,(Case J.Enabled When 1 Then 'Enabled' Else 'Disabled' End) As JobStatus 
+	,C.name As JobCategory 
+	,JSC.next_Run_Date As NextRunDate 
+	,Replace(Space(6 - Len(Convert(Varchar(6), JSC.next_Run_Time))), ' ', '0') + Convert(Varchar(6), JSC.next_Run_Time) As NextRunTime 
+	,S.Name As ScheduleName 
+	,(Case S.freq_type When 1 Then 'One time only' When 4 Then 'Daily' When 8 Then 'Weekly' When 16 Then 'Monthly' When 32 Then 'Monthly, relative to freq_interval' When 64 Then 'Runs when the SQL Server Agent service starts' When 128 Then 'Runs when the computer is idle' Else 'N/A' End) As Frequency 
+	,S.freq_interval
+	,(CASE WHEN S.freq_type NOT IN (1, 4) THEN IsNull(master.dbo.udf_JobScheduleDays(S.freq_interval), '') ELSE '' END) As FrequencyInterval 
+	,(Case S.freq_subday_type When 1 Then 'At the specified time' When 2 Then 'Seconds' When 4 Then 'Minutes' When 8 Then 'Hours' Else 'N/A' End) As FrequencyType 
+	,S.freq_subday_interval 
+	,S.freq_recurrence_factor 
+	,S.active_start_date As StartDate 
+	,S.active_end_date As EndDate 
+	,Replace(Space(6 - Len(Convert(Varchar(6), S.active_start_time))), ' ', '0') + Convert(Varchar(6), S.active_start_time) As StartTime 
+	,S.active_end_time As EndTime 
+	,JST.step_name As StepName 
+	,JST.command As StepCommand 
+	,O_Email.email_address As NotifyeEmailAddress 
+	,(Case J.notify_level_email When 0 Then 'Never' When 1 Then 'When the job succeeds' When 2 Then 'When the job fails'  When 3 Then 'Whenever the job completes (regardless of the job outcome)' Else 'N/A' End) As EmailNotificationLevel
+	,O_Page.pager_address NotifyPagerAddress 
+	,(Case J.notify_level_page When 0 Then 'Never' When 1 Then 'When the job succeeds' When 2 Then 'When the job fails'  When 3 Then 'Whenever the job completes (regardless of the job outcome)' Else 'N/A' End) As PagerNotificationLevel
+	,(Case ISNULL(JH.Run_Status, 0) When 0 Then 'Failed' When 1 Then 'Succeeded' When 2 Then 'Retry' When 3 Then 'Canceled' When 4 Then 'In progress' Else 'N/A' End) As StepStatus 
+	,JH.run_date As JobRunDate 
+	,JH.run_time As JobRunTim 
+	,JH.run_duration As JobRunDuration_HHMMSS 
+	,JH.message As JobRunMessage 
+From 
+	MSDB.dbo.sysJobs J 
+	Inner Join MSDB.dbo.syscategories C On J.category_id = C.category_id 
+	Inner Join MSDB.dbo.sysJobSchedules JSC On J.Job_ID = JSC.Job_ID 
+	Inner Join MSDB.dbo.sysSchedules S On JSC.Schedule_ID = S.Schedule_ID 
+	Inner Join MSDB.dbo.sysjobsteps JST On J.job_id = JST.job_id 
+	Left Outer Join MSDB.dbo.sysoperators O_Email On J.notify_email_operator_id = O_Email.id 
+	Left Outer Join MSDB.dbo.sysoperators O_Page On J.notify_page_operator_id = O_Page.id 
+	Left Outer Join Job_History JH On J.job_id = JH.job_id And JST.step_id = JH.step_id And JH.RowNo = 1 
+ORDER BY 
+	J.Name 

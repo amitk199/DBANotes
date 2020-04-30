@@ -1,0 +1,92 @@
+SET NOCOUNT ON  
+
+IF OBJECT_ID('tempdb..#LastBackUp') IS NOT NULL DROP TABLE #LastBackUp;
+IF OBJECT_ID('tempdb..#CSREPORT') IS NOT NULL  DROP TABLE #CSREPORT;
+
+SELECT  
+		bs.database_name,
+        bs.compressed_backup_size,
+		bs.backup_start_date,
+        bs.BACKUP_FINISH_DATE,
+        bmf.physical_device_name,
+        Position = ROW_NUMBER() OVER( PARTITION BY bs.database_name,bs.[type] 
+				   ORDER BY bs.backup_start_date DESC ),d.recovery_model_desc,bs.[type]
+into #LastBackUp
+FROM  msdb.dbo.backupmediafamily bmf
+JOIN msdb.dbo.backupmediaset bms ON bmf.media_set_id = bms.media_set_id
+JOIN msdb.dbo.backupset bs ON bms.media_set_id = bs.media_set_id
+INNER JOIN master.SYS.databases d on d.name=bs.database_name
+WHERE  d.state_desc = 'ONLINE'
+                AND d.is_read_only = 0 
+                AND d.source_database_id IS NULL
+				and ISNULL(bs.backup_finish_date, GETDATE()-1) > GETDATE() - 3
+
+SELECT  
+	
+	@@servername as servername,
+	CASE WHEN ISNULL((backup_finish_date), GETDATE()-10000) < GETDATE()-31
+    AND [type] = 'D' THEN 'FAILED' 
+   WHEN ISNULL((backup_finish_date), GETDATE()-10000) < GETDATE()-1
+     AND [type] = 'I' THEN 'FAILED' 
+   WHEN ISNULL((backup_finish_date), GETDATE()-10000) < GETDATE()-1 
+     AND [type] = 'L' THEN 'FAILED' 
+	 WHEN [type] IS NULL THEN 'FAILED' 
+   ELSE 'BACKUP SUCCESS' END AS BackupStatus, 
+   datediff(d, (backup_finish_date), getdate()) as 'full_dayssincelast',
+    CASE WHEN [type] = 'D'  THEN 'Full Backup' 
+		 WHEN [type] = 'I'  THEN 'Differential Backup'
+		 WHEN [type] = 'L'  THEN 'Transaction Log Backup'  END AS BackupType,
+		database_name as databasename ,
+		recovery_model_desc AS RecoveryMode,
+        backup_start_date,
+		BACKUP_FINISH_DATE,
+		CAST((compressed_backup_size) / 1048576 AS DECIMAL(10, 2) ) AS backup_size_mb,
+		physical_device_name as path,
+		GETDATE() as insert_date
+INTO #CSREPORT FROM #LastBackUp
+
+ORDER BY backup_finish_date desc
+
+
+
+DECLARE @tableHTML  NVARCHAR(MAX) ;
+declare @servername varchar(max)
+set @servername=@@SERVERNAME
+SET @tableHTML =
+    N'<H2>Database Backup Status </H2>' +
+    N'<table border="1" Cellspacing="0" cellpadding="0" style="font-size:x-small;">' +
+    N'<tr style="background-color:#999999;color:black;font-weight:bold;" align="center">
+	<td>ServerName</td>' +
+	N'<td>BackupStatus</td>' +
+	N'<td> BackupType</td>' +
+	N'<td> Databasename</td>' +
+	N'<td> RecoveryMode</td>' +
+	N'<td> Backup_start_date</td>' +
+	N'<td> BACKUP_FINISH_DATE</td>' +
+	N'<td>Backup_size_mb</td>' +
+	N'<td> Path</td></tr>' +
+	    CAST ( ( SELECT 
+					td = ServerName,'',
+					td = BackupStatus,'',
+					td = BackupType,'',
+					td = Databasename,'',
+					td = RecoveryMode,'',
+					td = Backup_start_date,'',
+					td = BACKUP_FINISH_DATE,'',
+					td = Backup_size_mb,'',
+					td = Path,''
+					FROM #CSREPORT
+			  FOR XML PATH('tr'), TYPE 
+	) AS NVARCHAR(MAX) )+
+    N'</table>' + N'<BR><BR><BR><BR><BR>Thanks<BR> Sanjay Humania<BR><BR><BR><BR><BR>' ; -- Email Sender Name
+if (select count(*) FROM #CSREPORT) > 0  
+Begin
+declare @sqlstr varchar (500)
+set @sqlstr = 'Database Backup Information '+ @servername
+EXEC msdb.dbo.sp_send_dbmail @profile_name = 'SQL_DB_Email', -- DB Mail Profile
+@recipients='sanjay.humania@gmail.com', -- Recipients Email
+@copy_recipients    =   'sanjayhumania@gmail.com', -- Copy Recipients Email
+@subject = @sqlstr,
+@body = @tableHTML,
+@body_format = 'HTML' ;
+End

@@ -1,0 +1,241 @@
+
+/********************************************************************************************
+Author: Sandeep Kumar.Sangineedy
+email: sangineedy@gmail.com
+Purpose: Analyze Any SQL Server Database Backup file (Full, Differential, Log, File Group, Differential File, Partial, Differential File)
+Compatible & Tested SQL Versions: 2005, 2008, 2008 R2, 2012, 2014 & 2016
+
+Usage: 
+1. Open SQL Server Management Studio (SSMS) and connect to SQL Server.
+2. Select the specified database and create a “New Query”, copy the complete code and, paste it and run (Complete code).
+
+Description: This Script reads [ READHEADERONLY ] information of any SQL Server database backup (Full, Differential, Log, File Group, Differential File, Partial, Differential) File information and displays in friendly way.
+
+Enter the Parameter for below mentioned variable
+
+	@DB_Backup_File = '*.bak  ' <-- Enter the Backup file name
+	@Backup_File_id =  			<-- If specific backup file contains multiple backups on same file. you may specify specific Position to analyze
+********************************************************************************************/
+
+
+DECLARE @DB_Backup_File VARCHAR(4000),@Backup_File_id INT
+
+SELECT @DB_Backup_File = 'H:\SQLBackups\Default\ADv.bak' 
+,@Backup_File_id = 1
+
+DECLARE @SQL_Cmd VARCHAR(MAX),@SQL_Version VARCHAR(50),@Product_Major_number INT
+		,@Current_SQL_Version VARCHAR(50),@Backup_SQL_Version VARCHAR(50),@Backup_Duration_Sec BIGINT
+		,@Product_Minor_number INT,@Product_Build_number INT,@Product_Revision_number INT
+		,@Backup_Positions_Count INT
+		
+
+SELECT @SQL_Version = CAST(SERVERPROPERTY('ProductVersion') AS VARCHAR(50))
+
+
+SELECT	@Product_Major_number = PARSENAME(CONVERT(VARCHAR(32), @SQL_Version), 4)
+		,@Product_Minor_number = PARSENAME(CONVERT(VARCHAR(32), @SQL_Version), 3)
+		,@Product_Build_number = PARSENAME(CONVERT(varchar(32), @SQL_Version), 2)
+		,@Product_Revision_number = PARSENAME(CONVERT(VARCHAR(32), @SQL_Version), 1)
+
+
+DECLARE @Header_Only_Final_Result TABLE(Sl_No INT IDENTITY(1,1),Backup_Information VARCHAR(4000),Backup_Value VARCHAR(4000),Value_Description VARCHAR(4000))
+
+IF OBJECT_ID('tempdb..##RESTORE_HEADERONLY_FROM_DISK','U') IS NOT NULL
+	DROP TABLE ##RESTORE_HEADERONLY_FROM_DISK
+CREATE TABLE ##RESTORE_HEADERONLY_FROM_DISK
+        (BackupName  nvarchar(128), BackupDescription  nvarchar(255),BackupType  smallint,ExpirationDate  datetime ,Compressed  bit ,
+        Position  smallint ,DeviceType  tinyint ,UserName  nvarchar(128) ,ServerName  nvarchar(128) ,DatabaseName  nvarchar(128) ,
+        DatabaseVersion  int ,DatabaseCreationDate  datetime ,BackupSize  numeric(20,0) ,FirstLSN  numeric(25,0) ,LastLSN  numeric(25,0) ,
+        CheckpointLSN  numeric(25,0) ,DatabaseBackupLSN  numeric(25,0) ,BackupStartDate  datetime ,BackupFinishDate  datetime ,
+		SortOrder  smallint ,CodePage  smallint ,UnicodeLocaleId  int ,UnicodeComparisonStyle  int ,CompatibilityLevel  tinyint ,
+        SoftwareVendorId  int ,SoftwareVersionMajor  int ,SoftwareVersionMinor  int ,SoftwareVersionBuild  int ,MachineName  nvarchar(128) ,
+        Flags  int ,BindingID  uniqueidentifier ,RecoveryForkID  uniqueidentifier ,Collation  nvarchar(128) ,FamilyGUID  uniqueidentifier ,
+        HasBulkLoggedData  bit ,IsSnapshot  bit ,IsReadOnly  bit ,IsSingleUser  bit ,HasBackupChecksums  bit ,IsDamaged  bit ,
+        BeginsLogChain  bit ,HasIncompleteMetaData  bit ,IsForceOffline  bit ,IsCopyOnly  bit ,FirstRecoveryForkID  uniqueidentifier ,
+        ForkPointLSN  numeric(25,0) NULL,RecoveryModel  nvarchar(60) ,DifferentialBaseLSN  numeric(25,0) NULL,DifferentialBaseGUID  uniqueidentifier,
+		BackupTypeDescription  nvarchar(60) ,BackupSetGUID  uniqueidentifier NULL,CompressedBackupSize bigint)
+
+
+		SELECT @SQL_Cmd = 'RESTORE HEADERONLY FROM DISK = '''+@DB_Backup_File+''''
+
+		
+		IF(@Product_Major_number = 9)
+			ALTER TABLE ##RESTORE_HEADERONLY_FROM_DISK DROP COLUMN [CompressedBackupSize];
+		IF(@Product_Major_number = 11)
+			ALTER TABLE ##RESTORE_HEADERONLY_FROM_DISK ADD [Containment] tinyint ;
+		ELSE IF((@Product_Major_number = 12) AND (@Product_Build_number < 2342))
+			ALTER TABLE ##RESTORE_HEADERONLY_FROM_DISK ADD [Containment] tinyint ;
+		ELSE IF(@Product_Major_number >= 12)
+		BEGIN
+			ALTER TABLE ##RESTORE_HEADERONLY_FROM_DISK ADD [Containment] tinyint ;
+			ALTER TABLE ##RESTORE_HEADERONLY_FROM_DISK ADD [KeyAlgorithm] nvarchar(32) ;
+			ALTER TABLE ##RESTORE_HEADERONLY_FROM_DISK ADD [EncryptorThumbprint] varbinary(20);
+			ALTER TABLE ##RESTORE_HEADERONLY_FROM_DISK ADD [EncryptorType] nvarchar(32) ;
+		END
+
+
+		INSERT INTO ##RESTORE_HEADERONLY_FROM_DISK
+		EXEC (@SQL_Cmd)
+
+
+	SELECT @Backup_Positions_Count = COUNT(*) FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+	DELETE FROM ##RESTORE_HEADERONLY_FROM_DISK WHERE Position <> @Backup_File_id
+
+ 
+	SELECT @Current_SQL_Version = CASE	WHEN @Product_Major_number = 9 THEN ' 2005 ('+CAST(@SQL_Version AS VARCHAR(50))+')'
+										WHEN @Product_Major_number = 10 AND @Product_Minor_number = 50 THEN ' 2008 R2 ('+CAST(@SQL_Version AS VARCHAR(50))+')'
+										WHEN @Product_Major_number = 10 THEN ' 2008 ('+CAST(@SQL_Version AS VARCHAR(50))+')'
+										WHEN @Product_Major_number = 11 THEN ' 2012 ('+CAST(@SQL_Version AS VARCHAR(50))+')'
+										WHEN @Product_Major_number = 12 THEN ' 2014 ('+CAST(@SQL_Version AS VARCHAR(50))+')'
+										WHEN @Product_Major_number = 13 THEN ' 2016 ('+CAST(@SQL_Version AS VARCHAR(50))+')'
+										WHEN @Product_Major_number = 14 THEN ' 2017 ('+CAST(@SQL_Version AS VARCHAR(50))+')'										
+									END
+	SELECT @Backup_SQL_Version = CASE	WHEN SoftwareVersionMajor = 9 THEN ' 2005 (' + CAST(SoftwareVersionMajor AS VARCHAR(50)) + '.' + CAST(SoftwareVersionMinor AS VARCHAR(50)) +'.'+ CAST(SoftwareVersionBuild AS VARCHAR(50)) + ')'
+										WHEN SoftwareVersionMajor = 10 AND SoftwareVersionMinor = 50 THEN ' 2008 R2 (' + CAST(SoftwareVersionMajor AS VARCHAR(50)) + '.' + CAST(SoftwareVersionMinor AS VARCHAR(50)) +'.'+ CAST(SoftwareVersionBuild AS VARCHAR(50)) + ')'
+										WHEN SoftwareVersionMajor = 10 THEN ' 2008 (' + CAST(SoftwareVersionMajor AS VARCHAR(50)) + '.' + CAST(SoftwareVersionMinor AS VARCHAR(50)) +'.'+ CAST(SoftwareVersionBuild AS VARCHAR(50)) + ')'
+										WHEN SoftwareVersionMajor = 11 THEN ' 2012 (' + CAST(SoftwareVersionMajor AS VARCHAR(50)) + '.' + CAST(SoftwareVersionMinor AS VARCHAR(50)) +'.'+ CAST(SoftwareVersionBuild AS VARCHAR(50)) + ')'
+										WHEN SoftwareVersionMajor = 12 THEN ' 2014 (' + CAST(SoftwareVersionMajor AS VARCHAR(50)) + '.' + CAST(SoftwareVersionMinor AS VARCHAR(50)) +'.'+ CAST(SoftwareVersionBuild AS VARCHAR(50)) + ')'
+										WHEN SoftwareVersionMajor = 13 THEN ' 2016 (' + CAST(SoftwareVersionMajor AS VARCHAR(50)) + '.' + CAST(SoftwareVersionMinor AS VARCHAR(50)) +'.'+ CAST(SoftwareVersionBuild AS VARCHAR(50)) + ')'
+										WHEN SoftwareVersionMajor = 14 THEN ' 2017 (' + CAST(SoftwareVersionMajor AS VARCHAR(50)) + '.' + CAST(SoftwareVersionMinor AS VARCHAR(50)) +'.'+ CAST(SoftwareVersionBuild AS VARCHAR(50)) + ')'
+								END
+			FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT 'Current Running SQL Version',CAST(SERVERPROPERTY('servername') AS VARCHAR(500)) + ' [ '+@Current_SQL_Version + ' ]','Currently Running SQL Instance'
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT [Backup File Property] = 'Backup File Path',SUBSTRING(@DB_Backup_File,1,LEN(@DB_Backup_File)-CHARINDEX('\',REVERSE(@DB_Backup_File),1)),'Backup file residing location'
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT [Backup File Property] = 'Backup File Name',SUBSTRING(@DB_Backup_File,LEN(@DB_Backup_File)-(CHARINDEX('\',REVERSE(@DB_Backup_File),1)-2),LEN(@DB_Backup_File)) ,'Backup file Name'
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT [Backup File Property] = 'Backup taken Host name',[Backup Value] = MachineName,'Name of the computer that performed the backup operation'
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT [Backup File Property] = 'Backup taken SQL Instance',[Backup Value] = ServerName + ' [ '+ @Backup_SQL_Version + ' ] ',[Description] = 'Name of the server that wrote the backup set.'
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'Database Name (Compatibility)',DatabaseName +' ('+ CAST(CompatibilityLevel AS VARCHAR(5)) + ')','Name of the database (Compatibility level) of Backuped DB'	
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'Backup Position'
+,'Total Backups: [ ' + CAST(@Backup_Positions_Count AS VARCHAR(5)) 
++ ' ]; Current Position: [ '+ CAST(@Backup_File_id AS VARCHAR(5))+' ]'
+,'Total Available Backups in this Backup File; Current Backup position'	
+
+
+
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'Backup Type',
+	CASE	WHEN BackupType = 1 THEN 'Full Database Backup'
+			WHEN BackupType = 2 THEN 'Transaction log'
+			WHEN BackupType = 4 THEN 'File'
+			WHEN BackupType = 5 THEN 'Differential database'
+			WHEN BackupType = 6 THEN 'Differential file'
+			WHEN BackupType = 7 THEN 'Partial'
+			WHEN BackupType = 8 THEN 'Differential partial'
+			END
+ ,'DB Backup Type'	
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'Database Created date',CONVERT(VARCHAR,DatabaseCreationDate) + ' (' + CAST(DATEDIFF(DD,DatabaseCreationDate,GETDATE()) AS VARCHAR(500)) + ' Days old)','Date and time the database was created'
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'Backup Initiated S/W', CASE WHEN CAST(SoftwareVendorId AS VARCHAR)= '4608' THEN 'Microsoft SQL Server' ELSE CAST(SoftwareVendorId AS VARCHAR(50)) END,'Software that initiated DB Backup'
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'Backup Start Date'
+,CONVERT(VARCHAR(50),BackupStartDate,113) + 
+' (' + CAST(DATEDIFF(DD,BackupStartDate,GETDATE()) AS VARCHAR(500)) + ') Days'
+,'Date and time that the backup operation began'
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'Backup Finished Date'
+,CONVERT(VARCHAR(50),BackupFinishDate,113) +
+ ' (' + CAST(DATEDIFF(DD,BackupFinishDate,GETDATE()) AS VARCHAR(500)) + ') Days'
+ ,'Date and time that the backup operation completed'
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+SELECT @Backup_Duration_Sec = DATEDIFF(SS,BackupStartDate,BackupFinishDate) FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'Backup Duration',
+   CAST((@Backup_Duration_Sec/ 3600) AS VARCHAR(50)) + ' Hours '
+  +CAST((@Backup_Duration_Sec% 3600)/60 AS VARCHAR(50)) + ' Minutes '
+  +CAST((@Backup_Duration_Sec% 60) AS VARCHAR(50)) + ' Seconds '
+  ,'Time taken for Backup operation to complete'
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'Backup Expiration Date',ISNULL(CONVERT(VARCHAR,ExpirationDate) + ' (' + CAST(DATEDIFF(DD,ExpirationDate,GETDATE()) AS VARCHAR(500)) + ') Days','Backup will never Expiration'),'Expiration date for the backup set'
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'DB Recovery Model',RecoveryModel ,'Recovery model for the Database'	
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'DB Collation',Collation ,'Collation used by the database'	
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'DB Backup Performed by',UserName ,'User name that performed the backup operation'	
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'DB Backup size',CASE WHEN BackupSize < 1024 then CAST(BackupSize AS VARCHAR(10)) +' Bytes' 
+	    WHEN BackupSize< 1048576 then CAST(CAST(BackupSize/1024.0 AS NUMERIC(10,2))AS VARCHAR(20)) +' KB'
+	    WHEN BackupSize< 1073741824  then CAST(CAST(BackupSize/1048576.0 AS NUMERIC(10,2))AS VARCHAR(20)) +' MB' 
+		WHEN BackupSize< 1099511627776  then CAST(CAST(BackupSize/1073741824.0 AS NUMERIC(10,2))AS VARCHAR(20)) +' GB'
+	    ELSE CAST(CAST(BackupSize/1099511627776 AS NUMERIC(10,2))AS VARCHAR(20)) +' TB' END 
+		,'DB Backup Size ***(without Compression)***'	
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+IF(@Product_Major_number > 9)
+BEGIN
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'Compressed DB Backup size', CASE WHEN Compressed = 1 THEN '[ Yes ]  ' ELSE ' [ No ]  ' END
+		+ CASE WHEN CompressedBackupSize < 1024 then CAST(BackupSize AS VARCHAR(10)) +' Bytes' 
+	    WHEN CompressedBackupSize< 1048576 then CAST(CAST(CompressedBackupSize/1024.0 AS NUMERIC(10,2))AS VARCHAR(20)) +' KB' 
+	    WHEN CompressedBackupSize< 1073741824  then CAST(CAST(CompressedBackupSize/1048576.0 AS NUMERIC(10,2))AS VARCHAR(20)) +' MB' 
+		WHEN CompressedBackupSize< 1099511627776  then CAST(CAST(CompressedBackupSize/1073741824.0 AS NUMERIC(10,2))AS VARCHAR(20)) +' GB' 
+	    ELSE CAST(CAST(CompressedBackupSize/1099511627776 AS NUMERIC(10,2))AS VARCHAR(20)) +' TB' END
+		,'Compressed DB Backup Size without Compression'	
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+END
+
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'DB Backup Name',BackupName ,'Backup set name'	
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+
+INSERT INTO @Header_Only_Final_Result(Backup_Information,Backup_Value,Value_Description)
+SELECT'Backup description',ISNULL(BackupDescription,'') ,'Backup set description'	
+FROM ##RESTORE_HEADERONLY_FROM_DISK
+
+SELECT * FROM @Header_Only_Final_Result
+
+
+DROP TABLE ##RESTORE_HEADERONLY_FROM_DISK
+
+
+

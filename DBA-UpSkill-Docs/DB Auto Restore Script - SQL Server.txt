@@ -1,0 +1,209 @@
+use master
+go
+
+IF EXISTS (
+        SELECT type_desc, type
+        FROM sys.procedures WITH(NOLOCK)
+        WHERE NAME = 'dba_restore'
+            AND type = 'P'
+      )
+     DROP PROCEDURE dba_restore
+GO
+
+
+--EXECUTE BELOW SP by giving 2 parameters:
+
+--master..dba_restore 'H:\SQLBackups\Default\AdventureWorks2008R2-Full Database Backup.bak','Sample1'
+ 
+--Parameter-1: Source DB Backup path & File Name which is to be used for DB Restore/Replace on top of Destination DB.
+--Parameter-2: Destination DB name which is to be Restored (Replace) with Source Backup file.
+
+--Note: Both Source DB & Destination DB should have EQUAL NO OF Files (Data & Log) OTHER the SP execution will get fail.
+
+
+Create procedure dba_restore @backupFile varchar(max),@dbName varchar(256) 
+as 
+declare  @headers table 
+( 
+LogicalName nvarchar(128) 
+,PhysicalName nvarchar(260) 
+,Type char(1) 
+,FileGroupName nvarchar(128) 
+,Size numeric(20,0) 
+,MaxSize numeric(20,0), 
+FileId tinyint, 
+CreateLSN numeric(25,0), 
+DropLSN numeric(25, 0), 
+UniqueID uniqueidentifier, 
+ReadOnlyLSN numeric(25,0), 
+ReadWriteLSN numeric(25,0), 
+BackupSizeInBytes bigint, 
+SourceBlockSize int, 
+FileGroupId int, 
+LogGroupGUID uniqueidentifier, 
+DifferentialBaseLSN numeric(25,0), 
+DifferentialBaseGUID uniqueidentifier, 
+IsReadOnly bit, 
+IsPresent bit, 
+TDEThumbprint varbinary(32) 
+)  
+ 
+/*preparing for the backup script */ 
+ 
+ 
+insert into @headers exec('restore filelistonly from disk = '''+ @backupFile +''''); 
+declare @h1count int=(select COUNT(* ) from @headers ) 
+declare @h2count int=(select COUNT(*) from sys.master_files where database_id=DB_ID(@dbName)) 
+if  (@h1count=@h2count) /*checking if there are equal number of files in both backup and destination db*/ 
+begin 
+ 
+ 
+/*Bringning the database into single user mode , meaning killing all the users conneted to the database*/ 
+ 
+print ('bringing database into single user mode') 
+declare @setsingle nvarchar(max) 
+set @setsingle =(select 'alter  DATABASE '+@dbName +' SET SINGLE_USER WITH ROLLBACK IMMEDIATE') 
+exec sp_executesql @setsingle 
+print ('the database  '+@dbName +'  is put into single user mode') 
+ 
+BEGIN TRY 
+ 
+declare @temp table(query varchar (4000)); 
+ 
+insert into @temp select 'restore database '+@dbName+' from disk='''+@backupFile +''' with'; 
+ 
+insert into @temp select 'move '''+h1.LogicalName+'''  to  '''+h2.physical_name+''',' from @headers as h1 inner  join 
+   sys.master_files as h2 on h2.file_id=h1.FileId /*joining the logical name and physical name based on the fileid*/ 
+    where h2.database_id=DB_ID(@dbName); 
+ 
+insert into @temp select 'replace,stats=10;' 
+ 
+ 
+/*converting the multiple rows of the table into one single row  which inturns form on big restore query  
+which will be executed using the sp_executesql */ 
+ 
+declare @restore nvarchar(max) 
+set @restore=(SELECT STUFF((SELECT '  ' + query FROM @temp FOR XML PATH('')) ,1,1,'') AS Txt) 
+print ('startting the database restore command') 
+print @restore 
+exec sp_executesql @restore 
+ 
+END TRY   
+BEGIN CATCH   
+  select  ERROR_NUMBER() AS ErrorNumber 
+     ,ERROR_SEVERITY() AS ErrorSeverity 
+     ,ERROR_STATE() AS ErrorState 
+     ,ERROR_PROCEDURE() AS ErrorProcedure 
+     ,ERROR_LINE() AS ErrorLine 
+     ,ERROR_MESSAGE() AS ErrorMessage; 
+ 
+ 
+END CATCH;  
+ 
+/*Bringning the database into multi user mode */ 
+ 
+ 
+declare @muluser nvarchar(max) 
+set @muluser =(select 'alter  DATABASE '+@dbName +' SET MULTI_USER ;') 
+exec sp_executesql @muluser 
+print ('the database  '+@dbName +'  is put into multi user mode') 
+ 
+ 
+/*fixing all the orphan users in the database which got refreshed*/ 
+ 
+print ('updating the orphan users no new logins will be created') 
+declare @fix0rph nvarchar(4000) 
+set @fix0rph=( 
+'use  '+@dbName+';  
+declare @query varchar(1000) 
+declare @executequery cursor 
+set @executequery=cursor for 
+select '' sp_change_users_login  ''+CHAR(39)+''update_one''+CHAR(39)+'',''+CHAR(39)+name+CHAR(39)+'',''+CHAR(39)+name+CHAR(39) 
+from sysusers where issqluser = 1 and (sid is not null and sid <> 0x0) AND SUSER_SNAME(sid) IS NULL 
+open @executequery 
+fetch next from @executequery into @query 
+while @@fetch_status=0 
+begin  
+ exec (@query) 
+print (@query) 
+fetch next from @executequery into @query 
+end 
+close @executequery; 
+deallocate @executequery;') 
+exec sp_executesql @fix0rph 
+ 
+end 
+     
+/*if there is no database present as mentioned in the procedure you will get the below error*/   
+      
+     else if (@h2count=0) 
+      print 'there is no database called '+@dbname+' in the present server and restore aborted' 
+       
+      /*if there are unequal number of files between the backup and the destination db you will get the below error*/   
+else  print 'un equal number files ,restore aborted' 
+go 
+ 
+ 
+/*excuting the procedure  
+-within the first quotes mention the full backup path and in the second qoutes mention 
+the database to which the backup has to be refreshed 
+-if no database is present you will get a error like  
+(there is no database called ITSM1 in the present server) 
+-if there are unequal number of files you will get a error like 
+(unequal number of files) 
+-IMPORTANT when you get a error like that please go with the  
+manual refresh*/ 
+ 
+
+--EXECUTE BELOW SP by giving 2 parameters:
+
+--master..dba_restore 'H:\SQLBackups\Default\AdventureWorks2008R2-Full Database Backup.bak','Sample1'
+ 
+--Parameter-1: Source DB Backup path & File Name which is to be used for DB Restore/Replace on top of Destination DB.
+--Parameter-2: Destination DB name which is to be Restored (Replace) with Source Backup file.
+
+--Note\Limitation: Both Source DB & Destination DB should have EQUAL NO OF Files (Data & Log) OTHER the SP execution will get fail.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

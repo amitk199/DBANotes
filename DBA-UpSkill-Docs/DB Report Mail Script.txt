@@ -1,0 +1,230 @@
+USE DBAdmin; 
+GO 
+SET ANSI_NULLS ON; 
+GO 
+SET QUOTED_IDENTIFIER ON; 
+GO 
+CREATE PROCEDURE [dbo].[usp_dbmonitorreport] 
+AS 
+BEGIN 
+    SET NOCOUNT ON; 
+    TRUNCATE TABLE [DBADB].[dbo].[DB_Monitor]; 
+    TRUNCATE TABLE [DBADB].[dbo].[GetDBSize]; 
+    TRUNCATE TABLE [DBADB].[dbo].[GetLogSize]; 
+    TRUNCATE TABLE [DBADB].[dbo].[GetDBFreeSize]; 
+    TRUNCATE TABLE [DBADB].[dbo].[GetDBState]; 
+    ------------------------------Data file size----------------------------  
+ 
+    INSERT INTO [DBADB].[dbo].[GetDBSize] 
+    ( 
+        Dbname, 
+        dbstatus, 
+        Recovery_Model, 
+        file_Size_MB, 
+        Space_Used_MB, 
+        Free_Space_MB 
+    ) 
+    EXEC sp_MSforeachdb 'use [?];  
+  select DB_NAME() AS DbName,  
+    CONVERT(varchar(20),DatabasePropertyEx(''?'',''Status'')) ,   
+    CONVERT(varchar(20),DatabasePropertyEx(''?'',''Recovery'')),   
+sum(size)/128.0 AS File_Size_MB,  
+sum(CAST(FILEPROPERTY(name, ''SpaceUsed'') AS INT))/128.0 as Space_Used_MB,  
+SUM( size)/128.0 - sum(CAST(FILEPROPERTY(name,''SpaceUsed'') AS INT))/128.0 AS Free_Space_MB   
+from sys.database_files with (NOLOCK) where type=0 group by type'; 
+ 
+    -------------------log size--------------------------------------  
+ 
+ 
+    INSERT INTO [DBADB].[dbo].[GetLogSize] 
+    ( 
+        Dbname, 
+        Log_File_Size_MB, 
+        log_Space_Used_MB, 
+        log_Free_Space_MB 
+    ) 
+    EXEC sp_MSforeachdb 'use [?];  
+  select DB_NAME() AS DbName,  
+sum(size)/128.0 AS Log_File_Size_MB,  
+sum(CAST(FILEPROPERTY(name, ''SpaceUsed'') AS INT))/128.0 as log_Space_Used_MB,  
+SUM( size)/128.0 - sum(CAST(FILEPROPERTY(name,''SpaceUsed'') AS INT))/128.0 AS log_Free_Space_MB   
+from sys.database_files with (NOLOCK) where type=1 group by type'; 
+ 
+    --------------------------------database free size  
+ 
+    INSERT INTO [DBADB].[dbo].[GetDBFreeSize] 
+    ( 
+        name, 
+        database_size, 
+        Freespace 
+    ) 
+    EXEC sp_MSforeachdb 'use [?];SELECT database_name = db_name()  
+    ,database_size = ltrim(str((convert(DECIMAL(15, 2), dbsize) + convert(DECIMAL(15, 2), logsize)) * 8192 / 1048576, 15, 2) + ''MB'')  
+    ,''unallocated space'' = ltrim(str((  
+                CASE   
+                    WHEN dbsize >= reservedpages  
+                        THEN (convert(DECIMAL(15, 2), dbsize) - convert(DECIMAL(15, 2), reservedpages)) * 8192 / 1048576  
+                    ELSE 0  
+                    END  
+                ), 15, 2) + '' MB'')  
+FROM (  
+    SELECT dbsize = sum(convert(BIGINT, CASE   
+                    WHEN type = 0  
+                        THEN size  
+                    ELSE 0  
+                    END))  
+        ,logsize = sum(convert(BIGINT, CASE   
+                    WHEN type <> 0  
+                        THEN size  
+                    ELSE 0  
+                    END))  
+    FROM sys.database_files  
+) AS files  
+,(  
+    SELECT reservedpages = sum(a.total_pages)  
+        ,usedpages = sum(a.used_pages)  
+        ,pages = sum(CASE   
+                WHEN it.internal_type IN (  
+                        202  
+                        ,204  
+                        ,211  
+                        ,212  
+                        ,213  
+                        ,214  
+                        ,215  
+                        ,216  
+                        )  
+                    THEN 0  
+                WHEN a.type <> 1  
+                    THEN a.used_pages  
+                WHEN p.index_id < 2  
+                    THEN a.data_pages  
+                ELSE 0  
+                END)  
+    FROM sys.partitions p with (NOLOCK) 
+    INNER JOIN sys.allocation_units a  
+        ON p.partition_id = a.container_id  
+    LEFT JOIN sys.internal_tables it  
+        ON p.object_id = it.object_id  
+) AS partitions'; 
+    -----------------------------------  
+    INSERT INTO [DBADB].[dbo].[GetDBState] 
+    ( 
+        dbname, 
+        DBstatus, 
+        R_model 
+    ) 
+    SELECT name, 
+           CONVERT(VARCHAR(20), DATABASEPROPERTYEX(name, 'status')), 
+           recovery_model_desc 
+    FROM sys.databases; 
+    INSERT INTO [DBADB].[dbo].[GetDBSize] 
+    ( 
+        Dbname, 
+        dbstatus, 
+        Recovery_Model 
+    ) 
+    SELECT Dbname, 
+           dbstatus, 
+           R_model 
+    FROM [DBADB].[dbo].[GetDBState] 
+    WHERE dbstatus <> 'online'; 
+ 
+    INSERT INTO [DBADB].[dbo].[GetLogSize] 
+    ( 
+        Dbname 
+    ) 
+    SELECT dbname 
+    FROM [DBADB].[dbo].[GetDBState] 
+    WHERE DBstatus <> 'online'; 
+ 
+    INSERT INTO [DBADB].[dbo].[GetDBFreeSize] 
+    ( 
+        name 
+    ) 
+    SELECT dbname 
+    FROM [DBADB].[dbo].[GetDBState] 
+    WHERE DBstatus <> 'online'; 
+ 
+    --Final Results 
+    INSERT INTO [DBADBDB].[dbo].[DB_Monitor] 
+    SELECT CAST(GETDATE() AS VARCHAR(100)) AS DateAs, 
+           D.Dbname, 
+           D.dbstatus, 
+           D.Recovery_Model, 
+           CAST((D.file_Size_MB + L.Log_File_Size_MB) AS INT) AS DB_SIZE, 
+           CAST(D.file_Size_MB AS INT) AS DATA_SIZE, 
+           CAST(L.Log_File_Size_MB AS INT) AS LOG_SIZE, 
+           CAST(D.Space_Used_MB AS INT) AS DATA_SPACE_USED, 
+           CAST(D.Free_Space_MB AS INT) AS DATA_FREE_SPACE, 
+           CAST((D.Space_Used_MB / D.file_Size_MB) * 100 AS INT) [%_USED], 
+           CAST((D.Free_Space_MB / D.file_Size_MB) * 100 AS INT) [%_FREE] 
+    FROM [DBADB].[dbo].[GetDBSize] D 
+        JOIN [DBADB].[dbo].[GetLogSize] L 
+            ON D.Dbname = L.Dbname 
+        JOIN [DBADB].[dbo].[GetDBFreeSize] FS 
+            ON D.Dbname = FS.name 
+    ORDER BY D.Dbname; 
+ 
+ 
+    --Report 
+    DECLARE @tableHTML NVARCHAR(MAX); 
+ 
+    SET @tableHTML 
+        = N'<font face="Arial" size="+1" COLOR="#000000"><br><br><left>Database Percent Utilization Report' + N' ' + N' ' 
+          + CONVERT(VARCHAR(12), GETDATE(), 107) + N'</center></font><br>' + N'<table border="0" cellpadding="3">' 
+          + N'<tr bgcolor=#F08080><th><font face="Arial" size="-1">DATEAS</font></th>' 
+          + N'<th><font face="Arial" size="-1">DBNAME</font></th>' 
+          + N'<th><font face="Arial" size="-1">DBSTATUS</font></th>' 
+          + N'<th><font face="Arial" size="-1">RECOVERY_MODEL</font></th>' 
+          + N'<th><font face="Arial" size="-1">DB_SIZE</font></th>' 
+          + N'<th><font face="Arial" size="-1">DATA_SIZE</font></th>' 
+          + N'<th><font face="Arial" size="-1">LOG_SIZE</font></th>' 
+          + N'<th><font face="Arial" size="-1">DATA_SPACE_USED</font></th>' 
+          + N'<th><font face="Arial" size="-1">DATA_FREE_SPACE</font></th>' 
+          + N'<th><font face="Arial" size="-1">%_USED</font></th>' 
+          + N'<th><font face="Arial" size="-1">%_FREE</font></th>' + CAST( 
+                                                                     ( 
+                                                                         SELECT td = DATEAS, 
+                                                                                '', 
+                                                                                td = DBNAME, 
+                                                                                '', 
+                                                                                td = DBSTATUS, 
+                                                                                '', 
+                                                                                td = RECOVERY_MODEL, 
+                                                                                '', 
+                                                                                td = DB_SIZE, 
+                                                                                '', 
+                                                                                td = DATA_SIZE, 
+                                                                                '', 
+                                                                                td = LOG_SIZE, 
+                                                                                '', 
+                                                                                td = DATA_SPACE_USED, 
+                                                                                '', 
+                                                                                td = DATA_FREE_SPACE, 
+                                                                                '', 
+                                                                                td = [%_USED], 
+                                                                                '', 
+                                                                                td = [%_FREE], 
+                                                                                '' 
+                                                                         FROM [DBADB].[dbo].[DB_Monitor] 
+                                                                         ORDER BY [%_USED] DESC 
+                                                                         FOR XML PATH('tr'), TYPE 
+                                                                     ) AS NVARCHAR(MAX)) + N'</table>'; 
+ 
+    -- Formatting of table font, size and colour 
+    SELECT @tableHTML 
+        = REPLACE(@tableHTML, '<td>', '<td style="text-align:center" bgcolor=#F4F6F6><font face="Arial" size="-1">'); 
+    SELECT @tableHTML = REPLACE(@tableHTML, '</td>', '</font></td>'); 
+ 
+ 
+    DECLARE @CompSubject VARCHAR(MAX); 
+    SET @CompSubject = 'Database Percent Utilization Report For ' + @@SERVERNAME; 
+ 
+ 
+    EXEC msdb.dbo.sp_send_dbmail @profile_name = 'DBADB', 
+                                 @recipients = 'DBADB@xxxxx.com', 
+                                 @subject = @CompSubject, 
+                                 @body = @tableHTML, 
+                                 @body_format = 'HTML'; 
+END;

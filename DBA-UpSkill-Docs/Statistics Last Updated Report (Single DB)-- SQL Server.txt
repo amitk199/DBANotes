@@ -1,0 +1,36 @@
+
+use DBName  -- put your required DB Name here
+
+go
+
+DECLARE @STATISTICS_EXPIRED_PERIOD_BY_DAY int
+SET  @STATISTICS_EXPIRED_PERIOD_BY_DAY = 7     --(Change the expired days here: 7 days)
+SELECT  SCHEMA_NAME(Table_Info.schema_id) AS [Schema_Name]
+  ,Table_Info.name AS Table_Name
+  ,Index_Info.name AS Index_Name
+  ,Column_Info.name AS Column_Name
+  ,Index_Info.type_desc Index_Type
+  ,STATS_DATE(Index_Info.object_id, Index_Info.index_id) AS Statistics_Update_Date
+  ,(CASE 
+    WHEN STATS_DATE(Index_Info.object_id, Index_Info.index_id) IS NULL 
+    THEN 'No Statistics Data / No Rows'  
+	WHEN DATEDIFF(day,STATS_DATE(Index_Info.object_id, Index_Info.index_id),GETDATE()) > @STATISTICS_EXPIRED_PERIOD_BY_DAY
+	THEN 'EXPIRED: More than '+ CAST(@STATISTICS_EXPIRED_PERIOD_BY_DAY AS nvarchar) +' day(s)'
+	WHEN DATEDIFF(day,STATS_DATE(Index_Info.object_id, Index_Info.index_id),GETDATE()) < @STATISTICS_EXPIRED_PERIOD_BY_DAY
+	THEN 'UPDATED'
+	ELSE 'No Statistics Data'
+	END ) AS Statistics_Status
+  ,Index_Info.is_primary_key                -- 1: YES ; 0: NO
+  ,Index_Info.is_unique                     -- 1: YES ; 0: NO
+  ,Index_Info.is_disabled                   -- 1: YES ; 0: NO
+  ,Index_Info.is_unique_constraint			-- 1: YES ; 0: NO
+  ,Index_Info.fill_factor AS Index_Fill_factor_Percent_Specificed
+FROM sys.indexes Index_Info 
+INNER JOIN sys.index_columns Index_Col    
+ON  Index_Info.object_id = Index_Col.object_id and Index_Info.index_id = Index_Col.index_id 
+INNER JOIN sys.columns Column_Info   
+ON Index_Col.object_id = Column_Info.object_id and Index_Col.column_id = Column_Info.column_id 
+INNER JOIN sys.tables Table_Info  
+ON Index_Info.object_id = Table_Info.object_id 
+WHERE  Table_Info.is_ms_shipped = 0
+ORDER BY STATS_DATE(Index_Info.object_id, Index_Info.index_id),Table_Info.name, Index_Info.name, Index_Info.index_id, Index_Col.index_column_id 

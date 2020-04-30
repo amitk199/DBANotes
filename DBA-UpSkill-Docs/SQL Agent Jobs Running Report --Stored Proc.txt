@@ -1,0 +1,159 @@
+use msdb
+GO 
+IF OBJECT_ID('dbo.spGetJobInfo') IS NOT NULL 
+DROP PROCEDURE dbo.spGetJobInfo 
+GO 
+CREATE PROCEDURE dbo.spGetJobInfo 
+AS 
+SET NOCOUNT ON 
+DECLARE @jobid VARCHAR(50) 
+DECLARE @sql NVARCHAR(1000) 
+CREATE TABLE #Jobs_Schedule( 
+            [schedule_id] [INT], 
+            [name] [SYSNAME], 
+            [enabled] [INT], 
+            [freq_type] [INT], 
+            [freq_interval] [INT], 
+            [freq_subday_type] [INT], 
+            [freq_subday_interval] [INT], 
+            [freq_relative_interval] [INT], 
+            [freq_recurrence_factor] [INT], 
+            [active_start_date] [INT], 
+            [active_end_date] [INT], 
+            [active_start_time] [INT], 
+            [active_end_time] [INT], 
+            [date_created] [DATETIME], 
+            [desc] VARCHAR(1000), 
+            [next_run_date] [INT], 
+            [next_run_time] [INT], 
+            [schedule_uid]    VARCHAR(1000), 
+            [job_count] [INT] 
+            ) ON [PRIMARY] 
+DECLARE c1 CURSOR FOR SELECT job_id FROM msdb..sysjobs 
+OPEN c1 
+    FETCH NEXT FROM c1 INTO @jobid 
+    WHILE @@fetch_status=0 
+        BEGIN 
+            INSERT #Jobs_Schedule EXEC ('msdb..sp_help_jobschedule @job_id='''+ @jobid+''',@include_description=1') 
+            FETCH NEXT FROM c1 INTO @jobid 
+        END 
+CLOSE c1 
+DEALLOCATE c1 
+ 
+CREATE TABLE #TempJoin 
+( 
+    job_id UNIQUEIDENTIFIER, 
+    Jobs VARCHAR(250), 
+    Category VARCHAR(250), 
+    OwnerName  VARCHAR(100), 
+    ScheduleName  VARCHAR(250), 
+    ISenabled  CHAR(4), 
+    Frequency VARCHAR(250), 
+    Date_Created  DATETIME, 
+    Active_Start_Date INT, 
+    Next_Run_Date  INT, 
+    Next_Run_Time INT 
+) 
+INSERT INTO #TempJoin 
+( 
+    job_id, 
+    Jobs, 
+    Category, 
+    OwnerName, 
+    ScheduleName, 
+    ISenabled, 
+    Frequency, 
+    Date_Created, 
+    Active_Start_Date, 
+    Next_Run_Date, 
+    Next_Run_Time 
+) 
+( 
+SELECT  
+a.[job_id], 
+a.[Jobs], 
+a.[Category], 
+l.[name] AS [Owner], 
+a.[Schedule Name], 
+a.[enabled], 
+temp.[desc] AS [Frequecy], 
+temp.date_created AS [DateCreated], 
+temp.active_start_date AS [StartDate], 
+temp.next_run_date AS [NextRunDate], 
+temp.next_run_time AS [NextRunTime] 
+FROM #Jobs_Schedule AS temp  
+RIGHT OUTER JOIN  
+(SELECT 
+    j.job_id, 
+    j.[name] AS [Jobs],  
+    j.owner_sid,  
+    c.[name] AS [Category],  
+    js.schedule_id,  
+    s.[name] AS [Schedule Name],  
+    CASE j.enabled WHEN 1 THEN 'YES' ELSE 'NO' END AS [enabled]  
+    FROM msdb..syscategories AS c  
+    RIGHT OUTER JOIN  
+    msdb..sysjobs AS j ON c.category_id = j.category_id 
+    LEFT OUTER JOIN  
+    msdb..sysjobschedules AS js ON j.job_id = js.job_id 
+    LEFT OUTER JOIN  
+    msdb..sysschedules AS s ON js.schedule_id = s.schedule_id) 
+AS a ON temp.schedule_id = a.schedule_id  
+LEFT OUTER JOIN  
+sys.server_principals AS l ON a.owner_sid = l.sid) 
+ 
+CREATE TABLE #TempJoin1 
+( 
+    Name VARCHAR(250), 
+    job_id UNIQUEIDENTIFIER, 
+    LastRunStatus VARCHAR(25), 
+    LastRunDate INT, 
+    LastRunTIme INT, 
+) 
+INSERT INTO #TempJoin1 
+( 
+    Name, 
+    job_id, 
+    LastRunStatus, 
+    LastRunDate, 
+    LastRunTIme 
+) 
+( 
+SELECT   
+   j.[name] AS [JobName], 
+   j.[job_id],   
+   run_status = CASE h.run_status   
+   WHEN 0 THEN 'Failed'  
+   WHEN 1 THEN 'Succeeded'  
+   WHEN 2 THEN 'Retry'  
+   WHEN 3 THEN 'Canceled'  
+   WHEN 4 THEN 'In progress'  
+   END,  
+   h.run_date AS LastRunDate,    
+   h.run_time AS LastRunTime  
+   FROM msdb..sysjobhistory h   
+   INNER JOIN 
+   msdb..sysjobs j ON h.job_id = j.job_id   
+   WHERE h.instance_id IN   
+   (SELECT MAX(h.instance_id)   
+        FROM msdb..sysjobhistory h GROUP BY (h.job_id)) 
+) 
+ 
+SELECT  
+    t1.Jobs, 
+    t1.OwnerName, 
+    t1.Category, 
+    t1.Date_Created, 
+    t1.Active_Start_Date, 
+    t1.ISenabled, 
+    t2.LastRunDate, 
+    t2.LastRunTIme, 
+    t2.LastRunStatus 
+    FROM #TempJoin t1 
+    INNER JOIN #TempJoin1 t2 
+    ON t1.job_id = t2.job_id 
+ 
+DROP Table #Jobs_Schedule 
+DROP Table #TempJoin 
+DROP Table #TempJoin1 
+GO
